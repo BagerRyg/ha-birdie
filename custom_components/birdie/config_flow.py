@@ -13,11 +13,46 @@ from homeassistant.components.bluetooth import (
     async_discovered_service_info,
     async_register_callback,
 )
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_ADDRESS
+from homeassistant.core import callback
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
 
 from .ble import is_birdie_advertisement, normalize_address
-from .const import CONF_NAME, DOMAIN, ENVIRONMENTAL_SERVICE_UUID
+from .const import (
+    CONF_CONNECTION_COOLDOWN,
+    CONF_MAX_SAMPLE_AGE,
+    CONF_NAME,
+    CONF_POLL_INTERVAL,
+    CONF_RETRY_INTERVAL,
+    CONF_SESSION_TIMEOUT,
+    DEFAULT_CONNECTION_COOLDOWN,
+    DEFAULT_MAX_SAMPLE_AGE,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_RETRY_INTERVAL,
+    DEFAULT_SESSION_TIMEOUT,
+    DOMAIN,
+    ENVIRONMENTAL_SERVICE_UUID,
+    MAX_CONNECTION_COOLDOWN,
+    MAX_MAX_SAMPLE_AGE,
+    MAX_POLL_INTERVAL,
+    MAX_RETRY_INTERVAL,
+    MAX_SESSION_TIMEOUT,
+    MIN_CONNECTION_COOLDOWN,
+    MIN_MAX_SAMPLE_AGE,
+    MIN_POLL_INTERVAL,
+    MIN_RETRY_INTERVAL,
+    MIN_SESSION_TIMEOUT,
+)
 
 DISCOVERY_TIMEOUT = 10
 
@@ -26,6 +61,24 @@ USER_SCHEMA = vol.Schema(
         vol.Required(CONF_ADDRESS): str,
         vol.Optional(CONF_NAME): str,
     }
+)
+
+POLLING_OPTIONS = (
+    (CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL, MIN_POLL_INTERVAL, MAX_POLL_INTERVAL),
+    (
+        CONF_CONNECTION_COOLDOWN,
+        DEFAULT_CONNECTION_COOLDOWN,
+        MIN_CONNECTION_COOLDOWN,
+        MAX_CONNECTION_COOLDOWN,
+    ),
+    (CONF_RETRY_INTERVAL, DEFAULT_RETRY_INTERVAL, MIN_RETRY_INTERVAL, MAX_RETRY_INTERVAL),
+    (
+        CONF_SESSION_TIMEOUT,
+        DEFAULT_SESSION_TIMEOUT,
+        MIN_SESSION_TIMEOUT,
+        MAX_SESSION_TIMEOUT,
+    ),
+    (CONF_MAX_SAMPLE_AGE, DEFAULT_MAX_SAMPLE_AGE, MIN_MAX_SAMPLE_AGE, MAX_MAX_SAMPLE_AGE),
 )
 
 
@@ -43,6 +96,12 @@ class BirdieConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Birdie."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Return the polling options flow."""
+        return BirdieOptionsFlow()
 
     def __init__(self) -> None:
         """Initialize flow state."""
@@ -243,3 +302,51 @@ class BirdieConfigFlow(ConfigFlow, domain=DOMAIN):
             return False
         self._discovered_devices[address] = _discovery_title(discovery_info)
         return True
+
+
+class BirdieOptionsFlow(OptionsFlow):
+    """Configure Bluetooth polling and cached reading limits."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage the polling options."""
+        errors: dict[str, str] = {}
+        options = dict(self.config_entry.options)
+        if user_input is not None:
+            options.update(user_input)
+            for key, *_ in POLLING_OPTIONS:
+                if not float(user_input[key]).is_integer():
+                    errors[key] = "whole_seconds"
+            if not errors and user_input[CONF_MAX_SAMPLE_AGE] < (
+                max(
+                    user_input[CONF_POLL_INTERVAL],
+                    user_input[CONF_CONNECTION_COOLDOWN],
+                )
+                + user_input[CONF_SESSION_TIMEOUT]
+            ):
+                errors[CONF_MAX_SAMPLE_AGE] = "sample_age_too_short"
+            if not errors:
+                return self.async_create_entry(
+                    title="",
+                    data={key: int(user_input[key]) for key, *_ in POLLING_OPTIONS},
+                )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(key, default=options.get(key, default)): NumberSelector(
+                        NumberSelectorConfig(
+                            min=minimum,
+                            max=maximum,
+                            step=1,
+                            mode=NumberSelectorMode.BOX,
+                            unit_of_measurement="s",
+                        )
+                    )
+                    for key, default, minimum, maximum in POLLING_OPTIONS
+                }
+            ),
+            errors=errors,
+        )

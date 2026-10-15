@@ -24,5 +24,31 @@
         }
       }
     }
+  },
+  "options": {
+    "error": {
+      "sample_age_too_short": "Maximum sample age must be at least the larger of the poll interval and Bluetooth cooldown, plus the session timeout.",
+      "whole_seconds": "Enter a whole number of seconds."
+    },
+    "step": {
+      "init": {
+        "title": "Birdie polling",
+        "description": "All times are in seconds. Bluetooth is released after each reading so the Birdie app can connect between polls.",
+        "data": {
+          "poll_interval": "Poll interval",
+          "connection_cooldown": "Minimum Bluetooth cooldown",
+          "retry_interval": "Retry delay",
+          "session_timeout": "Session timeout",
+          "max_sample_age": "Maximum sample age"
+        },
+        "data_description": {
+          "poll_interval": "Time to wait after a successful session before polling again.",
+          "connection_cooldown": "Minimum time to leave Bluetooth free between sessions for the Birdie app.",
+          "retry_interval": "Time to wait before retrying a failed read.",
+          "session_timeout": "Maximum time to spend connecting and reading or changing settings.",
+          "max_sample_age": "Cached readings become unavailable after this time without a successful read, allowing other room sensors to take over. The default is 3600 seconds (1 hour)."
+        }
+      }
+    }
   }
 }

@@ -24,23 +24,12 @@ async def async_setup_entry(hass: Any, entry: Any) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
     entry.runtime_data = coordinator
 
-    if not await coordinator.async_connect():
-        _LOGGER.warning(
-            "Unable to connect to Birdie device %s during setup; "
-            "entities will remain unavailable until the next successful connection",
-            coordinator.address,
-        )
-
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
     @callback
-    def _async_bluetooth_callback(
-        service_info: Any,
-        change: Any,
-    ) -> None:
-        """Reconnect when Home Assistant sees this BLE address again."""
-        hass.async_create_task(coordinator.async_connect_if_expected())
+    def _async_bluetooth_callback(service_info: Any, change: Any) -> None:
+        """Leave connections to scheduled polling."""
+        return
 
+    # Keep active scans enabled to rediscover Birdie between polling sessions.
     entry.async_on_unload(
         bluetooth.async_register_callback(
             hass,
@@ -50,14 +39,30 @@ async def async_setup_entry(hass: Any, entry: Any) -> bool:
         )
     )
 
+    await coordinator.async_refresh()
+    if not coordinator.last_update_success:
+        _LOGGER.warning(
+            "Unable to connect to Birdie device %s during setup; "
+            "entities will remain unavailable until the next successful connection",
+            coordinator.address,
+        )
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     async def _async_stop(event: Any) -> None:
         """Close the BLE connection when Home Assistant stops."""
-        await coordinator.async_disconnect()
+        await coordinator.async_shutdown()
 
     entry.async_on_unload(
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_stop)
     )
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
+
+
+async def _async_options_updated(hass: Any, entry: Any) -> None:
+    """Apply new timing settings by reloading this device only."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: Any, entry: Any) -> bool:
@@ -67,7 +72,7 @@ async def async_unload_entry(hass: Any, entry: Any) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         coordinator = entry.runtime_data
-        await coordinator.async_disconnect()
+        await coordinator.async_shutdown()
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
         bluetooth.async_rediscover_address(hass, coordinator.address)
     return unload_ok

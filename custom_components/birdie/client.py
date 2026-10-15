@@ -100,7 +100,8 @@ class BirdieBleClient:
     async def async_connect(self) -> bool:
         """Connect to the BLE device."""
         if self.is_connected:
-            return True
+            # Retry cleanup if a previous session could not release the adapter.
+            await self.async_disconnect()
         if self._client is not None:
             self._client = None
             self._services = None
@@ -120,7 +121,7 @@ class BirdieBleClient:
                 ble_device,
                 self.address,
                 disconnected_callback=self._handle_disconnect,
-                max_attempts=3,
+                max_attempts=1,
                 timeout=CONNECT_TIMEOUT,
                 use_services_cache=False,
                 **client_kwargs,
@@ -263,19 +264,24 @@ class BirdieBleClient:
 
         for characteristic in list(self._notify_characteristics):
             try:
-                await client.stop_notify(characteristic)
+                await asyncio.wait_for(client.stop_notify(characteristic), timeout=10)
             except (BleakError, TimeoutError, asyncio.TimeoutError, OSError):
                 pass
 
         if client.is_connected:
             try:
-                await client.disconnect()
-            except (BleakError, TimeoutError, asyncio.TimeoutError, OSError):
-                pass
+                await asyncio.wait_for(client.disconnect(), timeout=10)
+            except (BleakError, TimeoutError, asyncio.TimeoutError, OSError) as err:
+                # Keep the handle so shutdown or the next cycle can retry cleanup.
+                raise BirdieBleError(f"Unable to release Bluetooth: {err}") from err
+
+        if client.is_connected:
+            raise BirdieBleError("Bluetooth remains connected after disconnect")
 
         self._client = None
         self._services = None
         self._notify_characteristics.clear()
+        _LOGGER.debug("Disconnected from Birdie %s", self.address)
 
     async def async_write_co2_threshold(self, value: int) -> int:
         """Write CO2 threshold and return the value read back from the device."""
@@ -394,6 +400,8 @@ class BirdieBleClient:
 
     def _handle_disconnect(self, client: BleakClient | None = None) -> None:
         """Handle BLE disconnect."""
+        if client is not None and client is not self._client:
+            return
         self._client = None
         self._services = None
         self._notify_characteristics.clear()
