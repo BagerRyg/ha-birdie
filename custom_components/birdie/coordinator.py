@@ -169,6 +169,14 @@ class BirdieCoordinator(DataUpdateCoordinator[BirdieData]):
                         for key in ENVIRONMENTAL_FIELDS
                     ):
                         raise BirdieBleError("Incomplete environmental reading")
+                    # Do not present old mutable readings as part of a fresh sample.
+                    for key in (
+                        "birdie_state",
+                        "battery_percent",
+                        "co2_threshold_ppm",
+                        "cool_down_minutes",
+                    ):
+                        values.setdefault(key, None)
                     data = self.data.updated(**values, available=True)
                     sample_time = self.hass.loop.time()
             finally:
@@ -211,7 +219,11 @@ class BirdieCoordinator(DataUpdateCoordinator[BirdieData]):
     def _async_expire_sample(self, _now: Any) -> None:
         """Stop exposing an old sample without extending the polling interval."""
         self._cancel_expiry = None
-        if not self._stopping and not self._sample_is_fresh():
+        if self._stopping:
+            return
+        if self._sample_is_fresh():
+            self._schedule_expiry()
+        else:
             self._set_available(False)
 
     async def async_shutdown(self) -> None:
@@ -223,8 +235,10 @@ class BirdieCoordinator(DataUpdateCoordinator[BirdieData]):
             self._cancel_expiry = None
         await super().async_shutdown()
         async with self._connect_lock:
-            await self.client.async_disconnect()
-            self._set_available(False)
+            try:
+                await self.client.async_disconnect()
+            finally:
+                self._set_available(False)
 
     async def async_set_co2_threshold(self, value: int) -> None:
         """Write CO2 threshold, read it back, and update coordinator data."""
@@ -282,11 +296,12 @@ class BirdieCoordinator(DataUpdateCoordinator[BirdieData]):
     @callback
     def _async_handle_disconnect(self) -> None:
         """Keep a recent snapshot through a lost or busy Bluetooth connection."""
-        self._set_available(self._sample_is_fresh())
+        self._set_available(not self._stopping and self._sample_is_fresh())
 
     @callback
     def _set_available(self, available: bool) -> None:
         """Update availability while preserving the latest values."""
+        available = available and not self._stopping
         if self.data.available == available:
             return
         self.data = self.data.updated(available=available)

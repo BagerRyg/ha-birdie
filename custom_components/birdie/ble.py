@@ -80,10 +80,14 @@ def parse_humidity_percent(data: bytes | bytearray | memoryview) -> float:
     """Parse relative humidity from either uint16 or uint32 milli-percent RH."""
     payload = bytes(data)
     if len(payload) == 2:
-        return uint16_le(payload) / 1000
-    if len(payload) == 4:
-        return uint32_le(payload) / 1000
-    raise ValueError(f"expected 2 or 4 byte(s), got {len(payload)}")
+        humidity = uint16_le(payload) / 1000
+    elif len(payload) == 4:
+        humidity = uint32_le(payload) / 1000
+    else:
+        raise ValueError(f"expected 2 or 4 byte(s), got {len(payload)}")
+    if humidity > 100:
+        raise ValueError("relative humidity must be between 0 and 100 percent")
+    return humidity
 
 
 def parse_birdie_state(data: bytes | bytearray | memoryview) -> tuple[int, str, bool]:

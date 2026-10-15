@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -25,6 +26,9 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
 )
 
 from .ble import is_birdie_advertisement, normalize_address
@@ -132,6 +136,7 @@ class BirdieConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             address = normalize_address(self._discovery_info.address)
+            self._abort_if_unique_id_configured()
             return self.async_create_entry(
                 title=title,
                 data={
@@ -151,23 +156,32 @@ class BirdieConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle manual setup."""
+        errors: dict[str, str] = {}
         if user_input is not None:
             address = normalize_address(user_input[CONF_ADDRESS])
-            title = user_input.get(CONF_NAME) or self._discovered_devices.get(address) or address
-            await self.async_set_unique_id(address, raise_on_progress=False)
-            self._abort_if_unique_id_configured()
-            return self.async_create_entry(
-                title=title,
-                data={
-                    CONF_ADDRESS: address,
-                    CONF_NAME: title,
-                },
-            )
+            if re.fullmatch(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", address) is None:
+                errors[CONF_ADDRESS] = "invalid_address"
+            else:
+                title = user_input.get(CONF_NAME) or self._discovered_devices.get(address) or address
+                await self.async_set_unique_id(address, raise_on_progress=False)
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title=title,
+                    data={
+                        CONF_ADDRESS: address,
+                        CONF_NAME: title,
+                    },
+                )
 
-        if not self._scan_complete:
+        elif not self._scan_complete:
             return await self.async_step_scan()
 
         current_ids = self._async_current_ids(include_ignore=False)
+        self._discovered_devices = {
+            address: name
+            for address, name in self._discovered_devices.items()
+            if address not in current_ids
+        }
         self._async_collect_cached_discoveries(current_ids)
 
         if self._discovered_devices:
@@ -175,16 +189,27 @@ class BirdieConfigFlow(ConfigFlow, domain=DOMAIN):
                 step_id="user",
                 data_schema=vol.Schema(
                     {
-                        vol.Required(CONF_ADDRESS): vol.In(self._discovered_devices),
+                        vol.Required(CONF_ADDRESS): SelectSelector(
+                            SelectSelectorConfig(
+                                options=[
+                                    {"value": address, "label": f"{name} ({address})"}
+                                    for address, name in self._discovered_devices.items()
+                                ],
+                                custom_value=True,
+                                mode=SelectSelectorMode.DROPDOWN,
+                            )
+                        ),
                         vol.Optional(CONF_NAME): str,
                     }
                 ),
+                errors=errors,
             )
 
         return self.async_show_form(
             step_id="user",
             data_schema=USER_SCHEMA,
             description_placeholders={"manual": "true"},
+            errors=errors,
         )
 
     async def async_step_scan(

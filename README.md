@@ -2,7 +2,7 @@
 
 # Birdie for Home Assistant
 
-[![Version 0.1.5](https://img.shields.io/badge/version-0.1.5-blue)](custom_components/birdie/manifest.json)
+[![Version 0.1.6](https://img.shields.io/badge/version-0.1.6-blue)](custom_components/birdie/manifest.json)
 [![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Home Assistant 2026.8.1+](https://img.shields.io/badge/Home_Assistant-2026.8.1%2B-18BCF2)](https://www.home-assistant.io/)
 
@@ -15,7 +15,7 @@ A Home Assistant custom integration for Birdie BLE air quality monitors, includi
 adds scheduled Bluetooth polling so Home Assistant and the Birdie phone app can
 take turns connecting to the monitor.
 
-Fork version: **`v0.1.5`**, based on upstream `v0.1.3`.
+Fork version: **`v0.1.6`**, based on upstream `v0.1.3`.
 
 This fork requires **Home Assistant 2026.8.1 or newer**.
 
@@ -24,7 +24,8 @@ This fork requires **Home Assistant 2026.8.1 or newer**.
 *CO₂, temperature, humidity, and device readings in Home Assistant.*
 
 [Install](#installation) · [Polling settings](#polling-settings) ·
-[Thermostat fallback](#cached-readings-and-thermostat-fallback)
+[Thermostat fallback](#cached-readings-and-thermostat-fallback) ·
+[Validation](docs/validation.md) · [Changelog](CHANGELOG.md)
 
 ## Why this fork exists
 
@@ -129,12 +130,15 @@ temperature or humidity readings with zero.
 | Temperature | Sensor | °C | Temperature measurement |
 | Humidity | Sensor | % | Relative humidity measurement |
 | State | Sensor | — | `up`, `down`, `cooldown`, or `unknown` |
-| CO₂ alarm | Binary sensor | — | On when Birdie reports alarm state |
+| CO₂ alarm | Binary sensor | — | On when Birdie reports alarm state; unknown for missing or unrecognized state |
 | Battery | Sensor | % | Battery level mapped from the device enum |
 | CO₂ threshold | Number | ppm | Writable, 400–5000 ppm |
 | Cool down period | Number | min | Writable, 1–240 min; distinct from Bluetooth cooldown |
 
 Measurements and alarm state update on polls, rather than continuously.
+Missing optional state, battery, or setting values become unknown instead of
+retaining a value from an older snapshot. A complete temperature, humidity, and
+CO₂ reading is required; humidity outside 0–100% is rejected.
 
 ## Installation
 
@@ -142,7 +146,7 @@ Measurements and alarm state update on polls, rather than continuously.
 
 1. Open HACS and choose **Custom repositories** from its menu.
 2. Add `https://github.com/BagerRyg/ha-birdie` with category **Integration**.
-3. Install Birdie **`v0.1.5`** or later from this fork. If HACS offers only an older
+3. Install Birdie **`v0.1.6`** or later from this fork. If HACS offers only an older
    version, use the manual installation below to install this fork's current code.
 4. Restart Home Assistant.
 5. Add Birdie from **Settings → Devices & services**, then open **Configure** to
@@ -180,29 +184,51 @@ bluetooth_proxy:
 Passive-only proxies cannot perform the GATT reads and writes this integration
 needs. The original integration supports native Bluetooth and active ESPHome
 proxies, with Birdie Pro firmware `1.6.0` and `1.6.1` UUID compatibility. Those
-connection paths and UUID mappings are retained. This fork's live polling and
-phone-access verification used native Bluetooth, Home Assistant `2026.8.1`, and
-Birdie Pro firmware `1.6.6`; proxy behavior has not been independently retested.
+connection paths and UUID mappings are retained. Live polling and phone-access
+verification used **one Birdie Pro**, firmware `1.6.6`, native Bluetooth, and
+Home Assistant `2026.8.1` on the previous polling patch. It does not constitute
+hardware validation of every `v0.1.6` fix. Other Birdie models and firmware must
+expose compatible temperature, humidity, and CO₂ GATT characteristics; the Birdie
+name alone does not establish compatibility. Physical multi-device operation and
+proxy behavior have not been independently verified. See the
+[validation record and limits](docs/validation.md).
+
+### Setup and multiple devices
+
+- Close the Birdie app during initial setup if it is holding the connection.
+  Confirm that HA has a working Bluetooth adapter or active proxy and that the
+  monitor is in range.
+- Discovery choices include the Bluetooth address to distinguish monitors with
+  the same name. If yours is missing, enter its address manually, for example
+  `AA:BB:CC:DD:EE:FF`. Malformed addresses are rejected.
+- Add each physical monitor once. Duplicate addresses are blocked, including
+  competing discovery/manual setup flows. Give each entry a descriptive name.
+- Each entry has separate entity IDs, cached readings, expiry timers, and polling
+  options. These boundaries are tested with mocked devices; actual connection
+  capacity still depends on the adapter or proxy.
+- If readings stop while the phone is connected, close the app and allow the
+  configured retry delay. Recent cached readings remain available until expiry.
+
+Bluetooth advertisements and addresses help identify setup choices; they are
+not cryptographic proof of a device's identity.
 
 ## Validation and diagnostics
 
 Run the behavioral tests with Python 3.12 or newer from the repository root:
 
 ```bash
+python -m pip install -r requirements-test.txt
 python -m unittest discover -s tests -v
 ```
 
-The 35 tests exercise the real coordinator, BLE client, parsers, and models with
-mocked Home Assistant/Bluetooth boundaries. They cover polling, cooldown,
-cleanup, failed reads, expiry and recovery, setting writes, shutdown, and active
-scan registration. They do not simulate a complete Home Assistant installation
-or prove hardware compatibility.
-
-Live verification confirmed that the Birdie iOS app connected and updated, HA
-resumed reading after the app closed, and two consecutive automatic polls each
-released Bluetooth afterward. Sensor averaging recovered after fallback. The
-one-hour cutoff was checked with mocked time, not by disconnecting the physical
-monitor for an hour.
+The 76-test behavioral suite passed locally on Python `3.12.14`. It exercises
+integration code with mocked Home Assistant and Bluetooth boundaries, using the
+real pinned test dependency `voluptuous==0.15.2`.
+It covers polling, cleanup, expiry, setup validation, malformed device values,
+and isolation between multiple entries. These are regression checks, not a
+complete Home Assistant or hardware simulation. The
+[validation record](docs/validation.md) separates source review, automated tests,
+and the earlier live checks.
 
 Enable debug logging when diagnosing connection problems:
 
@@ -229,6 +255,8 @@ Contributions to the polling changes belong in
 [this fork's pull requests](https://github.com/BagerRyg/ha-birdie/pulls).
 Include the HA version, Birdie firmware, adapter/proxy type, polling options, and
 relevant logs with private identifiers removed when describing a fix.
+Debug logs can include Bluetooth addresses; redact these and any personal names
+or local network details before posting them.
 
 OTA updates, Birdie data-log downloads, and device firmware changes are outside
 this integration's scope.

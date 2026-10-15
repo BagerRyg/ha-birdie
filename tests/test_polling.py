@@ -189,12 +189,13 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         BLUETOOTH.async_register_callback.reset_mock()
 
-    def make_coordinator(self, options=None):
+    def make_coordinator(self, options=None, address="02:00:00:00:00:01", hass=None):
         loop = asyncio.get_running_loop()
         clock = types.SimpleNamespace(time=Mock(return_value=1000.0),
                                       call_soon_threadsafe=loop.call_soon_threadsafe)
-        hass = types.SimpleNamespace(loop=clock)
+        hass = hass or types.SimpleNamespace(loop=clock)
         entry = ConfigEntry()
+        entry.data = {"address": address, "name": "Birdie Pro"}
         entry.options = options or {}
         coordinator = coordinator_module.BirdieCoordinator(hass, entry)
         coordinator.client = FakeClient()
@@ -300,6 +301,18 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(coordinator.data.available)
                 self.assertEqual(coordinator.data.temperature_celsius, 15)
                 self.assertNotIn("read", coordinator.client.events)
+
+    async def test_setting_write_after_shutdown_cannot_restore_cached_availability(self):
+        for method, value in (("async_set_co2_threshold", 1200), ("async_set_cool_down", 90)):
+            with self.subTest(method=method):
+                coordinator = self.make_coordinator()
+                await coordinator.async_refresh()
+                await coordinator.async_shutdown()
+                coordinator.client.events.clear()
+                with self.assertRaisesRegex(HomeAssistantError, "Integration is stopping"):
+                    await getattr(coordinator, method)(value)
+                self.assertFalse(coordinator.data.available)
+                self.assertEqual(coordinator.client.events, [])
 
     async def test_successful_write_with_bad_snapshot_is_not_published(self):
         coordinator = self.make_coordinator()
@@ -534,13 +547,124 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(coordinator.data.available)
         self.assertEqual(coordinator._last_success, 4600)
 
+    async def test_early_expiry_rearms_until_exact_deadline(self):
+        coordinator = self.make_coordinator()
+        await coordinator.async_refresh()
+        coordinator.hass.loop.time.return_value = 4599.99
+        coordinator._async_expire_sample(None)
+        self.assertTrue(coordinator.data.available)
+        self.assertIsNotNone(coordinator._cancel_expiry)
+        self.assertAlmostEqual(CALL_LATER.call_args.args[1], 0.01)
+        coordinator.hass.loop.time.return_value = 4600
+        CALL_LATER.call_args.args[2](None)
+        self.assertFalse(coordinator.data.available)
+        self.assertIsNone(coordinator._cancel_expiry)
+        self.assertEqual(coordinator.client.events.count("connect"), 1)
+
+    async def test_new_snapshot_clears_missing_mutable_values_but_keeps_device_versions(self):
+        coordinator = self.make_coordinator()
+        coordinator.client.values.update(birdie_state=1, battery_percent=75,
+                                         firmware_version="1.6.6", hardware_version="1.0.0")
+        await coordinator.async_refresh()
+        self.assertTrue(coordinator.data.co2_alarm)
+        coordinator.hass.loop.time.return_value = 1180
+        coordinator.client.values = {"temperature_celsius": 21.1, "humidity_percent": 45.0,
+                                     "co2_ppm": 650}
+        await coordinator.async_refresh()
+        self.assertTrue(coordinator.data.available)
+        self.assertEqual(coordinator.data.temperature_celsius, 21.1)
+        for field in ("birdie_state", "co2_alarm", "battery_percent",
+                      "co2_threshold_ppm", "cool_down_minutes"):
+            self.assertIsNone(getattr(coordinator.data, field))
+        self.assertEqual(coordinator.data.firmware_version, "1.6.6")
+        self.assertEqual(coordinator.data.hardware_version, "1.0.0")
+        self.assertEqual(coordinator._last_success, 1180)
+
+    async def test_backend_lookup_failure_keeps_recent_sample_and_uses_retry_interval(self):
+        coordinator = self.make_coordinator({constants.CONF_RETRY_INTERVAL: 240})
+        await coordinator.async_refresh()
+        previous = coordinator.data
+        coordinator.hass.loop.time.return_value = 1180
+        client = coordinator.client = client_module.BirdieBleClient(
+            coordinator.hass, coordinator.address, Mock(), Mock()
+        )
+        with patch.object(client, "_async_ble_device", side_effect=BleakError("adapter unavailable")):
+            await coordinator.async_refresh()
+        self.assertTrue(coordinator.last_update_success)
+        self.assertIs(coordinator.data, previous)
+        self.assertEqual(coordinator._last_success, 1000)
+        self.assertEqual(coordinator.update_interval.total_seconds(), 240)
+
+    async def test_shutdown_failure_and_late_disconnect_cannot_restore_availability(self):
+        coordinator = self.make_coordinator()
+        await coordinator.async_refresh()
+        coordinator.client.disconnect_error = BirdieBleError("adapter unavailable")
+        with self.assertRaises(BirdieBleError):
+            await coordinator.async_shutdown()
+        self.assertFalse(coordinator.data.available)
+        self.assertIsNone(coordinator._cancel_expiry)
+        coordinator._async_handle_disconnect()
+        self.assertFalse(coordinator.data.available)
+
+    async def test_two_devices_poll_independently_and_keep_separate_cooldowns_and_caches(self):
+        first = self.make_coordinator()
+        second = self.make_coordinator({constants.CONF_CONNECTION_COOLDOWN: 300},
+                                       address="02:00:00:00:00:02", hass=first.hass)
+        second.client.values["temperature_celsius"] = 19.2
+        gate = first.client.read_gate = asyncio.Event()
+        poll = asyncio.create_task(first.async_refresh())
+        await first.client.read_started.wait()
+        await second.async_refresh()
+        self.assertFalse(poll.done())
+        self.assertEqual(first.client.events, ["connect", "read"])
+        self.assertEqual(second.client.events, ["connect", "read", "disconnect"])
+        gate.set()
+        await poll
+        self.assertNotEqual(first.address, second.address)
+        self.assertIsNot(first.client, second.client)
+        self.assertEqual(first.data.temperature_celsius, 22.3)
+        self.assertEqual(second.data.temperature_celsius, 19.2)
+        self.assertEqual(first._next_connection_at, 1120)
+        self.assertEqual(second._next_connection_at, 1300)
+        first.hass.loop.time.return_value = 1180
+        first.client.connect_result = False
+        await first.async_refresh()
+        await second.async_refresh()
+        self.assertTrue(first.data.available)
+        self.assertTrue(second.data.available)
+        self.assertEqual(first.client.events.count("connect"), 2)
+        self.assertEqual(second.client.events.count("connect"), 1)
+        self.assertEqual(first._last_success, 1000)
+        self.assertEqual(second._last_success, 1000)
+
+    async def test_two_devices_expiry_and_shutdown_do_not_affect_each_other(self):
+        first = self.make_coordinator({constants.CONF_MAX_SAMPLE_AGE: 180})
+        second = self.make_coordinator(address="02:00:00:00:00:02", hass=first.hass)
+        await first.async_refresh()
+        await second.async_refresh()
+        second_expiry = second._cancel_expiry
+        first.hass.loop.time.return_value = 1180
+        first._async_expire_sample(None)
+        self.assertFalse(first.data.available)
+        self.assertTrue(second.data.available)
+        await first.async_shutdown()
+        second_expiry.assert_not_called()
+        self.assertFalse(second._stopping)
+        self.assertIs(second._cancel_expiry, second_expiry)
+        second.client.values["temperature_celsius"] = 20.0
+        await second.async_refresh()
+        self.assertEqual(second.data.temperature_celsius, 20.0)
+        self.assertEqual(second._last_success, 1180)
+        self.assertFalse(first.data.available)
+        self.assertEqual(first.client.events.count("connect"), 1)
+
 
 class ClientTests(unittest.IsolatedAsyncioTestCase):
-    def make_client(self):
+    def make_client(self, address="02:00:00:00:00:01"):
         self.on_values = Mock()
         self.on_disconnect = Mock()
         hass = types.SimpleNamespace(loop=asyncio.get_running_loop())
-        return client_module.BirdieBleClient(hass, "02:00:00:00:00:01", self.on_values, self.on_disconnect)
+        return client_module.BirdieBleClient(hass, address, self.on_values, self.on_disconnect)
 
     def attach_ble(self, client):
         bleak = types.SimpleNamespace(is_connected=True, stop_notify=AsyncMock())
@@ -643,6 +767,114 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await client.async_connect())
             self.assertEqual(connect.call_args.kwargs["max_attempts"], 1)
             notify.assert_not_awaited()
+
+    async def test_connection_preparation_errors_are_normal_connection_failures(self):
+        for stage in ("stale_cleanup", "device_lookup"):
+            for error in (BleakError("adapter unavailable"), OSError("adapter gone"), TimeoutError()):
+                with self.subTest(stage=stage, error=type(error).__name__):
+                    client = self.make_client()
+                    stale_error = error if stage == "stale_cleanup" else None
+                    lookup_error = error if stage == "device_lookup" else None
+                    with patch.object(client_module, "close_stale_connections_by_address",
+                                      new=AsyncMock(side_effect=stale_error)), \
+                         patch.object(client, "_async_ble_device", new=AsyncMock(side_effect=lookup_error)), \
+                         patch.object(client_module, "establish_connection", new_callable=AsyncMock) as connect:
+                        self.assertFalse(await client.async_connect())
+                        connect.assert_not_awaited()
+                        self.assertIsNone(client._client)
+
+    async def test_malformed_setting_readback_becomes_a_birdie_error(self):
+        for method, value, payloads in (
+            ("async_write_co2_threshold", 1200, (b"", b"\x01", b"\x01\x02\x03")),
+            ("async_write_cool_down", 30, (b"", b"\x01\x02")),
+        ):
+            for payload in payloads:
+                with self.subTest(method=method, length=len(payload)):
+                    client = self.make_client()
+                    with patch.object(client, "_async_write_then_read", return_value=payload):
+                        with self.assertRaisesRegex(BirdieBleError, "readback"):
+                            await getattr(client, method)(value)
+
+    async def test_cancellation_during_disconnect_waits_for_release_even_when_repeated(self):
+        client = self.make_client()
+        bleak = self.attach_ble(client)
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def disconnect():
+            started.set()
+            await release.wait()
+            bleak.is_connected = False
+            client._handle_disconnect(bleak)
+
+        bleak.disconnect.side_effect = disconnect
+        cleanup = asyncio.create_task(client.async_disconnect())
+        await started.wait()
+        for _ in range(2):
+            cleanup.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(cleanup.done())
+            self.assertTrue(client.is_connected)
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(cleanup, timeout=1)
+        self.assertFalse(client.is_connected)
+        self.assertIsNone(client._client)
+        bleak.disconnect.assert_awaited_once()
+
+    async def test_cancelled_cleanup_timeout_retains_handle_and_can_retry(self):
+        client = self.make_client()
+        bleak = self.attach_ble(client)
+        started = asyncio.Event()
+        wait_for = asyncio.wait_for
+
+        async def disconnect():
+            started.set()
+            await asyncio.Event().wait()
+
+        async def short_wait_for(awaitable, timeout):
+            return await wait_for(awaitable, timeout=0.01)
+
+        bleak.disconnect.side_effect = disconnect
+        with patch.object(client_module.asyncio, "wait_for", new=short_wait_for), \
+             self.assertLogs(client_module.__name__, level="WARNING"):
+            cleanup = asyncio.create_task(client.async_disconnect())
+            await started.wait()
+            cleanup.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await wait_for(cleanup, timeout=1)
+        self.assertIs(client._client, bleak)
+        self.assertTrue(client.is_connected)
+
+        async def successful_disconnect():
+            bleak.is_connected = False
+
+        bleak.disconnect.side_effect = successful_disconnect
+        await client.async_disconnect()
+        self.assertIsNone(client._client)
+
+    async def test_two_clients_disconnect_and_callbacks_are_isolated(self):
+        first = self.make_client()
+        first_callback = self.on_disconnect
+        first_bleak = self.attach_ble(first)
+        second = self.make_client(address="02:00:00:00:00:02")
+        second_callback = self.on_disconnect
+        second_bleak = self.attach_ble(second)
+        second_services = second._services
+        await first.async_disconnect()
+        first._handle_disconnect(first_bleak)
+        await asyncio.sleep(0)
+        self.assertIsNone(first._client)
+        self.assertIs(second._client, second_bleak)
+        self.assertIs(second._services, second_services)
+        self.assertTrue(second.is_connected)
+        self.assertFalse(second._expected_disconnect)
+        first_callback.assert_not_called()
+        second_callback.assert_not_called()
+        second._handle_disconnect(second_bleak)
+        await asyncio.sleep(0)
+        second_callback.assert_called_once()
+        first_callback.assert_not_called()
 
 
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):

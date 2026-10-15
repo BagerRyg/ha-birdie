@@ -107,15 +107,13 @@ class BirdieBleClient:
             self._services = None
             self._notify_characteristics.clear()
 
-        await close_stale_connections_by_address(self.address)
-
-        ble_device, client_class, client_kwargs = await self._async_ble_device()
-        if ble_device is None:
-            return False
-
-        self._expected_disconnect = False
-
         try:
+            await close_stale_connections_by_address(self.address)
+            ble_device, client_class, client_kwargs = await self._async_ble_device()
+            if ble_device is None:
+                return False
+
+            self._expected_disconnect = False
             client = await establish_connection(
                 client_class,
                 ble_device,
@@ -254,7 +252,27 @@ class BirdieBleClient:
                 )
 
     async def async_disconnect(self) -> None:
-        """Disconnect and clean up notifications."""
+        """Finish bounded Bluetooth cleanup before propagating cancellation."""
+        cleanup = asyncio.create_task(self._async_disconnect())
+        cancelled = False
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+            except Exception:
+                # Retrieve and propagate the cleanup error below.
+                break
+        if cancelled:
+            try:
+                cleanup.result()
+            except Exception as err:
+                _LOGGER.warning("Bluetooth cleanup failed during cancellation: %s", err)
+            raise asyncio.CancelledError
+        cleanup.result()
+
+    async def _async_disconnect(self) -> None:
+        """Disconnect and clean up notifications, retaining failed handles."""
         self._expected_disconnect = True
         client = self._client
         if client is None:
@@ -289,7 +307,10 @@ class BirdieBleClient:
         data = await self._async_write_then_read(
             IAQ_CO2_THRESHOLD_CHARACTERISTIC_UUID, payload
         )
-        parsed = parse_characteristic_values(IAQ_CO2_THRESHOLD_CHARACTERISTIC_UUID, data)
+        try:
+            parsed = parse_characteristic_values(IAQ_CO2_THRESHOLD_CHARACTERISTIC_UUID, data)
+        except ValueError as err:
+            raise BirdieBleError(f"Invalid CO2 threshold readback: {err}") from err
         return int(parsed["co2_threshold_ppm"])
 
     async def async_write_cool_down(self, value: int) -> int:
@@ -298,7 +319,10 @@ class BirdieBleClient:
         data = await self._async_write_then_read(
             COOL_DOWN_PERIOD_CHARACTERISTIC_UUID, payload
         )
-        parsed = parse_characteristic_values(COOL_DOWN_PERIOD_CHARACTERISTIC_UUID, data)
+        try:
+            parsed = parse_characteristic_values(COOL_DOWN_PERIOD_CHARACTERISTIC_UUID, data)
+        except ValueError as err:
+            raise BirdieBleError(f"Invalid cool down period readback: {err}") from err
         return int(parsed["cool_down_minutes"])
 
     async def _async_write_then_read(self, uuid: str, payload: bytes) -> bytes:

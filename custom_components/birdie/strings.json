@@ -5,6 +5,7 @@
       "not_supported": "The discovered Bluetooth device is not a supported Birdie device."
     },
     "error": {
+      "invalid_address": "Enter a Bluetooth address in the format AA:BB:CC:DD:EE:FF.",
       "no_devices_found": "No Birdie devices were discovered. You can still add one manually by entering its Bluetooth address."
     },
     "progress": {

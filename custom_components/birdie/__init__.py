@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -39,15 +40,26 @@ async def async_setup_entry(hass: Any, entry: Any) -> bool:
         )
     )
 
-    await coordinator.async_refresh()
-    if not coordinator.last_update_success:
-        _LOGGER.warning(
-            "Unable to connect to Birdie device %s during setup; "
-            "entities will remain unavailable until the next successful connection",
-            coordinator.address,
-        )
+    try:
+        await coordinator.async_refresh()
+        if not coordinator.last_update_success:
+            _LOGGER.warning(
+                "Unable to connect to Birdie device %s during setup; "
+                "entities will remain unavailable until the next successful connection",
+                coordinator.address,
+            )
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except (Exception, asyncio.CancelledError):
+        # No platform owns the coordinator after a failed or cancelled setup.
+        # Stop its expiry/polling timers and release any pending connection.
+        try:
+            await coordinator.async_shutdown()
+        except Exception:
+            _LOGGER.exception("Unable to clean up Birdie after setup failed")
+        finally:
+            hass.data[DOMAIN].pop(entry.entry_id, None)
+        raise
 
     async def _async_stop(event: Any) -> None:
         """Close the BLE connection when Home Assistant stops."""

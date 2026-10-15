@@ -35,7 +35,7 @@ class BirdieData:
     @property
     def co2_alarm(self) -> bool | None:
         """Return whether the Birdie CO2 alarm is active."""
-        if self.birdie_state is None:
+        if self.birdie_state not in BIRDIE_STATE_VALUES:
             return None
         return self.birdie_state == BIRDIE_STATE_DOWN
 
