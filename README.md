@@ -1,16 +1,30 @@
-# Birdie Home Assistant Integration — Bluetooth polling fork
+<a href="https://birdie.design/products/birdie-pro"><img src="custom_components/birdie/brand/icon@2x.png" alt="Birdie mascot" width="96"></a>
 
-[![HACS validation](https://github.com/BagerRyg/ha-birdie/actions/workflows/hacs.yml/badge.svg)](https://github.com/BagerRyg/ha-birdie/actions/workflows/hacs.yml)
-[![Hassfest validation](https://github.com/BagerRyg/ha-birdie/actions/workflows/hassfest.yml/badge.svg)](https://github.com/BagerRyg/ha-birdie/actions/workflows/hassfest.yml)
+# Birdie for Home Assistant
+
+[![Version 0.1.5](https://img.shields.io/badge/version-0.1.5-blue)](custom_components/birdie/manifest.json)
+[![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Home Assistant 2026.8.1+](https://img.shields.io/badge/Home_Assistant-2026.8.1%2B-18BCF2)](https://www.home-assistant.io/)
+
+**Bring Birdie readings into Home Assistant while keeping direct Bluetooth access
+for the Birdie phone app.**
 
 A Home Assistant custom integration for Birdie BLE air quality monitors, including
-Birdie Pro. This fork of [dellzhui/ha-birdie](https://github.com/dellzhui/ha-birdie)
+[Birdie Pro](https://birdie.design/products/birdie-pro). This fork of
+[dellzhui/ha-birdie](https://github.com/dellzhui/ha-birdie)
 adds scheduled Bluetooth polling so Home Assistant and the Birdie phone app can
 take turns connecting to the monitor.
 
-Fork version: **`0.1.3.post2`**, based on upstream `v0.1.3`.
+Fork version: **`v0.1.5`**, based on upstream `v0.1.3`.
 
 This fork requires **Home Assistant 2026.8.1 or newer**.
+
+![Birdie sensor readings in Home Assistant](docs/images/ha-sensors.jpg)
+
+*CO₂, temperature, humidity, and device readings in Home Assistant.*
+
+[Install](#installation) · [Polling settings](#polling-settings) ·
+[Thermostat fallback](#cached-readings-and-thermostat-fallback)
 
 ## Why this fork exists
 
@@ -35,6 +49,10 @@ session finishes.
 
 Open **Settings → Devices & services → Birdie → Configure**. Saving options
 reloads that Birdie device. All values are whole seconds.
+
+![Birdie polling options in Home Assistant](docs/images/ha-polling-options.jpg)
+
+*Poll interval, Bluetooth cooldown, and retry controls. All five settings are explained below.*
 
 | Setting | Default | Allowed range | Purpose |
 | --- | ---: | ---: | --- |
@@ -124,9 +142,8 @@ Measurements and alarm state update on polls, rather than continuously.
 
 1. Open HACS and choose **Custom repositories** from its menu.
 2. Add `https://github.com/BagerRyg/ha-birdie` with category **Integration**.
-3. Install Birdie from this fork, choosing a version that includes the polling
-   changes (`0.1.3.post2` or later). If only upstream `v0.1.3` is offered, use the
-   manual installation below to install this fork's current code.
+3. Install Birdie **`v0.1.5`** or later from this fork. If HACS offers only an older
+   version, use the manual installation below to install this fork's current code.
 4. Restart Home Assistant.
 5. Add Birdie from **Settings → Devices & services**, then open **Configure** to
    adjust polling settings.
@@ -220,7 +237,11 @@ this integration's scope.
 
 This fork builds on [dellzhui/ha-birdie](https://github.com/dellzhui/ha-birdie),
 which provides the original Bluetooth support, discovery flow, entities, and
-diagnostic tools. The polling changes are maintained in this fork.
+diagnostic tools. The polling changes are maintained by
+[BagerRyg](https://github.com/BagerRyg) and fork contributors.
+
+The Birdie mascot is the brand asset retained from upstream. This is a community
+integration for Birdie devices.
 
 The project remains licensed under the **MIT License**. See [LICENSE](LICENSE)
 for the original copyright and license terms.
