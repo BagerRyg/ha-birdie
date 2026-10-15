@@ -23,7 +23,7 @@ This fork requires **Home Assistant 2026.8.1 or newer**.
 
 *CO₂, temperature, humidity, and device readings in Home Assistant.*
 
-[Install](#installation) · [Polling settings](#polling-settings) ·
+[Prerequisites](#prerequisites) · [Install](#installation) · [Polling settings](#polling-settings) ·
 [Thermostat fallback](#cached-readings-and-thermostat-fallback) ·
 [Validation](docs/validation.md) · [Changelog](CHANGELOG.md)
 
@@ -142,9 +142,52 @@ CO₂ reading is required; humidity outside 0–100% is rejected.
 
 ## Installation
 
+### Prerequisites
+
+Before installing, check the following:
+
+| Requirement | What you need |
+| --- | --- |
+| Home Assistant | **2026.8.1 or newer**, with access to install custom integrations and restart HA. HA OS and the official HA Container image include their required Python runtime. |
+| Monitor | A powered, in-range Birdie Pro exposing the supported temperature, humidity, and CO₂ characteristics. Firmware `1.6.6` has been tested; see [compatibility limits](#bluetooth-requirements-and-compatibility) for other firmware/models. |
+| Bluetooth connection | Either a supported local Bluetooth adapter accessible to HA, or a network-connected **active ESPHome Bluetooth Proxy** added through HA's ESPHome integration. Advertisement-only reception is insufficient. |
+| HA Bluetooth setup | Configure the built-in **Bluetooth** integration under **Settings → Devices & services** and verify that an adapter or proxy is available. Local adapters in Docker/VMs need the host setup below. |
+| Installation access | For manual installation, access to HA's persistent config directory; the files must be readable by HA and end up at `custom_components/birdie/manifest.json` within that directory. HACS is an optional alternative. |
+| Initial device access | Close the Birdie phone app and any diagnostic tool holding its BLE connection during the first read. No operating-system pairing or pairing PIN is required by this integration. |
+
+Downloads and updates require access to the relevant repositories/package
+sources. Once installed, sensor polling uses local Bluetooth and requires no
+Birdie cloud account, API key, MQTT broker, or internet connection. A proxy must
+remain reachable over the local network. The Birdie app, Tado, RoomMind, and
+HomeKit are optional and are not installation dependencies.
+
+### Software dependencies
+
+Home Assistant manages the runtime libraries; **do not manually install or
+upgrade Python packages inside your HA installation** for this integration.
+
+- The integration's [manifest](custom_components/birdie/manifest.json) declares
+  the built-in `bluetooth` and `bluetooth_adapters` integrations as dependencies.
+- HA's Bluetooth integration supplies `bleak`, `bleak-retry-connector`, and the
+  Bluetooth adapter/backend libraries. For reference, HA `2026.8.1` specifies
+  `bleak==3.0.2` and `bleak-retry-connector==4.6.3` in its
+  [Bluetooth manifest](https://github.com/home-assistant/core/blob/2026.8.1/homeassistant/components/bluetooth/manifest.json).
+  Later HA releases manage their own versions.
+- HA supplies the `voluptuous` schema library. Birdie's own `requirements` list
+  is empty because it uses these HA-managed dependencies.
+- `requirements-test.txt` is only for running this repository's tests. The
+  standalone diagnostic probe separately needs `bleak` on the computer running
+  it; neither step is part of normal HA installation.
+
+The Python **3.12+ test instructions below apply only to the mocked test suite**,
+not to running Home Assistant itself. HA `2026.8.1` requires Python `3.14.2+`
+according to its [package metadata](https://github.com/home-assistant/core/blob/2026.8.1/pyproject.toml);
+use the runtime shipped with your HA OS/Container version.
+
 ### HACS custom repository
 
-1. Open HACS and choose **Custom repositories** from its menu.
+1. Have [HACS installed](https://www.hacs.xyz/docs/use/download/download/), then
+   open HACS and choose **Custom repositories** from its menu.
 2. Add `https://github.com/BagerRyg/ha-birdie` with category **Integration**.
 3. Install Birdie **`v0.1.7`** or later from this fork. If HACS offers only an older
    version, use the manual installation below to install this fork's current code.
@@ -170,19 +213,63 @@ version can replace the polling changes.
 
 ## Bluetooth requirements and compatibility
 
-Enable a supported Home Assistant Bluetooth adapter. Birdie is discovered
-through the integration's setup flow; operating-system Bluetooth pairing is not
-required. Manual setup by Bluetooth address is also available.
+Provide either a supported local adapter or an active ESPHome Bluetooth Proxy.
+Birdie is discovered through the integration's setup flow; operating-system
+Bluetooth pairing is not required. Manual setup by Bluetooth address is also
+available.
 
-For an ESPHome Bluetooth Proxy, active connections must be enabled:
+### Local adapters: HA OS, virtual machines, and Docker
+
+HA OS handles the Bluetooth software setup. For a local USB adapter in a VM,
+pass the adapter through to the HA guest. A host-only adapter is not sufficient.
+
+For **Home Assistant Container on Linux**, BlueZ must run on the host and its
+D-Bus socket must be accessible inside the container. HA documents BlueZ
+**5.43 minimum / 5.63+ recommended**, recommends `dbus-broker`, and recommends
+Linux kernel `5.15.62+`. Merge these settings into the existing HA service in
+Docker Compose; retain its existing config volume and other settings:
 
 ```yaml
+cap_add:
+  - NET_ADMIN
+  - NET_RAW
+volumes:
+  - /run/dbus:/run/dbus:ro
+```
+
+If the host socket is under `/var/run/dbus`, use
+`/var/run/dbus:/run/dbus:ro` instead. These host requirements concern a **local
+adapter**; a proxy supplies Bluetooth remotely. See HA's
+[official Bluetooth setup and adapter guide](https://www.home-assistant.io/integrations/bluetooth/#requirements-for-linux-systems)
+for installation-specific details and supported adapters.
+
+### ESPHome Bluetooth Proxy
+
+Use an ESPHome proxy with active GATT connection support, add it to HA through
+the ESPHome integration, and keep its native API reachable from HA. For an ESP32,
+the relevant firmware settings are below; this is a fragment, not a complete
+board/network configuration:
+
+```yaml
+api:
+
+esp32_ble_tracker:
+
 bluetooth_proxy:
   active: true
 ```
 
-Passive-only proxies cannot perform the GATT reads and writes this integration
-needs. The original integration supports native Bluetooth and active ESPHome
+Active **connections** are separate from active **scanning**. The proxy needs a
+free connection slot when Birdie is polled; other BLE integrations can occupy
+those slots. See the [ESPHome Bluetooth Proxy documentation](https://esphome.io/components/bluetooth_proxy/)
+for supported hardware and complete configurations.
+
+Advertisement-only proxies cannot perform the GATT reads and writes this
+integration needs.
+
+### Device and firmware compatibility
+
+The original integration supports native Bluetooth and active ESPHome
 proxies, with Birdie Pro firmware `1.6.0` and `1.6.1` UUID compatibility. Those
 connection paths and UUID mappings are retained. Live polling and phone-access
 verification used **one Birdie Pro**, firmware `1.6.6`, native Bluetooth, and
@@ -239,7 +326,11 @@ logger:
     custom_components.birdie: debug
 ```
 
-The upstream standalone probe remains available:
+The upstream standalone probe is optional. Run it from a repository checkout in
+a separate Python virtual environment on a computer with its own Bluetooth
+adapter and the operating system's Bluetooth permissions. It connects directly
+through that computer's adapter; it does not use HA's ESPHome proxy connection.
+These commands are for that environment, not HA's managed Python installation:
 
 ```bash
 python -m pip install bleak
