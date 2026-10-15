@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.7
+
+- Add the fork's issue-tracker URL required by HACS manifest validation.
+  Runtime code is unchanged from `v0.1.6`.
+
 ## 0.1.6
 
 Reliability and validation follow-up to the Bluetooth polling fork. Polling

@@ -2,7 +2,7 @@
 
 # Birdie for Home Assistant
 
-[![Version 0.1.6](https://img.shields.io/badge/version-0.1.6-blue)](custom_components/birdie/manifest.json)
+[![Version 0.1.7](https://img.shields.io/badge/version-0.1.7-blue)](custom_components/birdie/manifest.json)
 [![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Home Assistant 2026.8.1+](https://img.shields.io/badge/Home_Assistant-2026.8.1%2B-18BCF2)](https://www.home-assistant.io/)
 
@@ -15,7 +15,7 @@ A Home Assistant custom integration for Birdie BLE air quality monitors, includi
 adds scheduled Bluetooth polling so Home Assistant and the Birdie phone app can
 take turns connecting to the monitor.
 
-Fork version: **`v0.1.6`**, based on upstream `v0.1.3`.
+Fork version: **`v0.1.7`**, based on upstream `v0.1.3`.
 
 This fork requires **Home Assistant 2026.8.1 or newer**.
 
@@ -146,7 +146,7 @@ CO₂ reading is required; humidity outside 0–100% is rejected.
 
 1. Open HACS and choose **Custom repositories** from its menu.
 2. Add `https://github.com/BagerRyg/ha-birdie` with category **Integration**.
-3. Install Birdie **`v0.1.6`** or later from this fork. If HACS offers only an older
+3. Install Birdie **`v0.1.7`** or later from this fork. If HACS offers only an older
    version, use the manual installation below to install this fork's current code.
 4. Restart Home Assistant.
 5. Add Birdie from **Settings → Devices & services**, then open **Configure** to

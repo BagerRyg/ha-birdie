@@ -33,6 +33,7 @@
   "documentation": "https://github.com/BagerRyg/ha-birdie",
   "integration_type": "device",
   "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/BagerRyg/ha-birdie/issues",
   "requirements": [],
-  "version": "0.1.6"
+  "version": "0.1.7"
 }
